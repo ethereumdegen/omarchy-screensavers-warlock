@@ -50,14 +50,30 @@ The installer:
 1. copies `bin/*` into `~/.config/omarchy/bin`
 2. copies `sets/*` into `~/.config/omarchy/screensaver-sets` (existing sets are kept
    unless you pass `--force`), and creates an `omarchy` set that restores the stock look
-3. puts `~/.config/omarchy/bin` first on `PATH` via `~/.config/uwsm/env.d/50-omarchy-bin.sh`
-   (session) and a marked block in `~/.bashrc` (login shells), and applies it to the
-   running Hyprland session so no re-login is needed
+3. puts `~/.config/omarchy/bin` first on `PATH` three ways: `~/.config/uwsm/env.d/50-omarchy-bin.sh`
+   (session startup), a marked block in `~/.bashrc` (login shells, which is how the idle
+   service resolves commands), and an `hl.env` line in `~/.config/hypr/hyprland.lua` so a
+   `hyprctl reload` keeps it. It is also applied to the running session, so no re-login
+   is needed.
 4. optionally adds a **Style → Screensaver → Set** submenu (`--with-menu`)
 5. activates the warlock set
 
 Nothing under `/usr/share/omarchy` is touched. `./uninstall.sh` reverses all of it
 (`--purge` also deletes the sets).
+
+### Relationship to stock Omarchy
+
+Omarchy's own customization path (**Style → Screensaver** in the menu:
+*Edit Text* / *Set From Image* / *Restore Default*) edits the single art file
+`~/.config/omarchy/branding/screensaver.txt` and keeps ttfx's full random effect
+rotation. That still works after installing this pack — activating a set writes the
+set's art to exactly that file, so `omarchy branding screensaver image|text|reset` and
+the menu entries behave normally.
+
+What this pack adds on top is what the single-file path cannot express: several arts
+rotating in one theme, a curated effect list with per-effect speed options, gradient
+palettes, and one-command switching between themes. If you only want a different logo,
+use the stock path; you do not need this.
 
 ## Use
 

@@ -16,6 +16,7 @@ BIN_DIR="$CONFIG_DIR/bin"
 SETS_DIR="$CONFIG_DIR/screensaver-sets"
 MENU_FILE="$CONFIG_DIR/extensions/omarchy-menu.jsonc"
 UWSM_ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/uwsm/env.d/50-omarchy-bin.sh"
+HYPR_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
 BASHRC="$HOME/.bashrc"
 MARKER="omarchy-screensavers-warlock"
 
@@ -123,6 +124,20 @@ PY
   echo "    added PATH block to $BASHRC"
 else
   echo "    $BASHRC already wired"
+fi
+
+# Hyprland re-applies only config-declared env on `hyprctl reload`, so declare it
+# there as well; otherwise a reload drops the override until the next login.
+if [[ -f $HYPR_CONFIG ]] && ! grep -q "$MARKER" "$HYPR_CONFIG"; then
+  cat >>"$HYPR_CONFIG" <<'EOF'
+
+-- omarchy-screensavers-warlock: keep ~/.config/omarchy/bin ahead of the packaged
+-- omarchy commands for everything the compositor spawns (the screensaver terminal
+-- resolves omarchy-screensaver through this PATH). Declared here so `hyprctl reload`
+-- keeps it; ~/.config/uwsm/env.d/50-omarchy-bin.sh covers session startup.
+hl.env("PATH", os.getenv("HOME") .. "/.config/omarchy/bin:" .. (os.getenv("PATH") or ""))
+EOF
+  echo "    added hl.env PATH line to $HYPR_CONFIG"
 fi
 
 # Apply to the running compositor too, so nothing needs a re-login.

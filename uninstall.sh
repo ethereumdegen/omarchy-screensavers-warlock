@@ -14,6 +14,7 @@ BIN_DIR="$CONFIG_DIR/bin"
 SETS_DIR="$CONFIG_DIR/screensaver-sets"
 STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/screensaver-set"
 UWSM_ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/uwsm/env.d/50-omarchy-bin.sh"
+HYPR_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
 BASHRC="$HOME/.bashrc"
 MARKER="omarchy-screensavers-warlock"
 
@@ -46,6 +47,31 @@ with open(path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")
 PY
   echo "    removed PATH block from $BASHRC"
+fi
+
+if grep -q "$MARKER" "$HYPR_CONFIG" 2>/dev/null; then
+  python3 - "$HYPR_CONFIG" "$MARKER" <<'PY'
+import sys
+
+path, marker = sys.argv[1:3]
+with open(path, encoding="utf-8") as handle:
+    lines = handle.read().splitlines()
+
+# Our block: the marker comment, its continuation comments, and the hl.env line.
+start = next(i for i, line in enumerate(lines) if marker in line)
+end = start
+while end < len(lines) and not lines[end].startswith("hl.env("):
+    end += 1
+del lines[start:end + 1]
+while start and not lines[start - 1].strip():
+    del lines[start - 1]
+    start -= 1
+
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write("\n".join(lines) + "\n")
+PY
+  echo "    removed hl.env PATH line from $HYPR_CONFIG"
+  command -v hyprctl >/dev/null && hyprctl reload >/dev/null 2>&1
 fi
 
 echo "==> Restoring the stock screensaver art"
