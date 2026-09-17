@@ -1,0 +1,181 @@
+#!/bin/bash
+
+# Switch between screensaver sets. See screensaver-lib.sh for the set layout.
+#
+# Activating a set copies one of its art files over ~/.config/omarchy/branding/screensaver.txt
+# (the file stock Omarchy and `omarchy branding screensaver` read) and records the name in
+# ~/.local/state/omarchy/screensaver-set, which ~/.config/omarchy/bin/omarchy-screensaver
+# reads to pick art, effect and gradient for every animation.
+
+set -uo pipefail
+
+source "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/bin/screensaver-lib.sh"
+
+die() {
+  echo "$@" >&2
+  exit 1
+}
+
+usage() {
+  cat <<EOF
+Usage: screensaver-set [command]
+
+  (none) | get        Print the active set
+  list                List sets, marking the active one
+  set <name>          Activate a set
+  next                Activate the next set in alphabetical order
+  show [name]         Print a set's art, effects, palettes and a sample ttfx argv
+  save <name>         Snapshot the current branding art into a new set
+  art <name>          Edit a set's art file(s)
+  effects [name]      Edit a set's effects list (no name: print every ttfx effect)
+  palettes <name>     Edit a set's gradient palettes
+  preview [name]      Start the screensaver now (optionally after switching)
+
+Sets live in $SS_SETS_DIR
+EOF
+}
+
+list_sets() {
+  find "$SS_SETS_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort
+}
+
+# Effect names ttfx accepts, taken from its own subcommand list.
+ttfx_effects() {
+  ttfx --help 2>/dev/null |
+    awk '/^Commands:/ { inside = 1; next } /^Options:/ { inside = 0 } inside && NF { print $1 }' |
+    grep -vx help
+}
+
+require_set() {
+  [[ -n ${1:-} ]] || die "Which set? Known sets:$(list_sets | tr '\n' ' ' | sed 's/^/ /')"
+  [[ -d $SS_SETS_DIR/$1 ]] || die "No such set: $1. Known sets:$(list_sets | tr '\n' ' ' | sed 's/^/ /')"
+}
+
+validate_effects() {
+  local name=$1 unknown
+  unknown=$(comm -23 <(ss_effect_names "$name" | sort -u) <(ttfx_effects | sort -u) | tr '\n' ' ')
+  [[ -z ${unknown// /} ]] || die "Set $name lists unknown effects: ${unknown% }"
+}
+
+activate() {
+  local name=$1
+  require_set "$name"
+  validate_effects "$name"
+
+  # Multi-art sets rotate at runtime; install the first as the branding art so
+  # `omarchy branding screensaver` still shows a member of the set.
+  local -a arts=()
+  mapfile -t arts < <(ss_arts "$name")
+  ((${#arts[@]})) && install -Dm644 "${arts[0]}" "$SS_BRANDING_ART"
+
+  mkdir -p "$(dirname "$SS_STATE_FILE")"
+  printf '%s\n' "$name" >"$SS_STATE_FILE"
+
+  local effects palettes
+  effects=$(ss_effect_lines "$name" | wc -l)
+  palettes=$(ss_palette_lines "$name" | wc -l)
+  printf 'Screensaver set: %s (%d art, %s, %s)\n' "$name" "${#arts[@]}" \
+    "$([[ $effects -eq 0 ]] && echo "all effects" || echo "$effects effects")" \
+    "$([[ $palettes -eq 0 ]] && echo "effect default colors" || echo "$palettes palettes")"
+  command -v omarchy-notification-send >/dev/null &&
+    omarchy-notification-send "Screensaver set: $name" >/dev/null 2>&1
+
+  # A running screensaver has its art and effect already loaded; restart it.
+  if pgrep -f '[o]rg.omarchy.screensaver' >/dev/null; then
+    pkill -f '[o]rg.omarchy.screensaver'
+    sleep 0.3
+    omarchy-launch-screensaver force >/dev/null 2>&1
+  fi
+}
+
+edit_files() {
+  local -a files=("$@")
+  ((${#files[@]})) || die "Nothing to edit"
+  omarchy-launch-editor "${files[@]}"
+}
+
+case "${1:-get}" in
+get)
+  ss_active_set
+  ;;
+list)
+  active=$(ss_active_set)
+  while read -r name; do
+    [[ $name == "$active" ]] && printf '* %s\n' "$name" || printf '  %s\n' "$name"
+  done < <(list_sets)
+  ;;
+set)
+  activate "${2:-}"
+  ;;
+next)
+  mapfile -t names < <(list_sets)
+  ((${#names[@]})) || die "No sets in $SS_SETS_DIR"
+  current=$(ss_active_set)
+  index=0
+  for i in "${!names[@]}"; do
+    [[ ${names[i]} == "$current" ]] && index=$(((i + 1) % ${#names[@]}))
+  done
+  activate "${names[index]}"
+  ;;
+show)
+  name=${2:-$(ss_active_set)}
+  require_set "$name"
+  printf 'set:      %s%s\n' "$name" "$([[ $name == "$(ss_active_set)" ]] && echo " (active)")"
+  printf 'art:      %s\n' "$(ss_arts "$name" | xargs -r -n1 basename | tr '\n' ' ')"
+  printf 'palettes: %s\n' "$(ss_palette_names "$name" | tr '\n' ' ')"
+  echo 'effects:'
+  ss_effect_lines "$name" | sed 's/^/  /'
+  ss_build_argv "$name"
+  printf 'sample:   ttfx %s\n' "${SS_ARGV[*]}"
+  ;;
+save)
+  name=${2:-}
+  [[ -n $name ]] || die "Usage: screensaver-set save <name>"
+  [[ -f $SS_BRANDING_ART ]] || die "No current art at $SS_BRANDING_ART"
+  mkdir -p "$SS_SETS_DIR/$name"
+  install -m644 "$SS_BRANDING_ART" "$SS_SETS_DIR/$name/art.txt"
+  [[ -f $SS_SETS_DIR/$name/effects ]] || {
+    printf '# One line per animation: "<ttfx effect> [ttfx args...]". Blank file = every effect.\n' \
+      >"$SS_SETS_DIR/$name/effects"
+    ttfx_effects | sed 's/^/# /' >>"$SS_SETS_DIR/$name/effects"
+  }
+  [[ -f $SS_SETS_DIR/$name/palettes ]] || {
+    printf '# Gradients: "<name>: <colors...>", picked at random per animation.\n' \
+      >"$SS_SETS_DIR/$name/palettes"
+  }
+  echo "Saved current art into set $name ($SS_SETS_DIR/$name)"
+  ;;
+art)
+  require_set "${2:-}"
+  mapfile -t arts < <(ss_arts "$2")
+  edit_files "${arts[@]}"
+  ;;
+effects)
+  if [[ -z ${2:-} ]]; then
+    name=$(ss_active_set)
+    [[ -n $name ]] || {
+      ttfx_effects
+      exit 0
+    }
+  else
+    name=$2
+  fi
+  require_set "$name"
+  edit_files "$SS_SETS_DIR/$name/effects"
+  ;;
+palettes)
+  require_set "${2:-}"
+  edit_files "$SS_SETS_DIR/$2/palettes"
+  ;;
+preview)
+  [[ -n ${2:-} ]] && activate "$2"
+  omarchy-launch-screensaver force
+  ;;
+-h | --help | help)
+  usage
+  ;;
+*)
+  usage >&2
+  exit 1
+  ;;
+esac

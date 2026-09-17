@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Set-aware fork of the packaged omarchy-screensaver (omarchy 4.0.4).
+#
+# ~/.config/omarchy/bin is prepended to PATH by ~/.config/uwsm/env.d/50-omarchy-bin.sh
+# (Hyprland session) and ~/.bashrc (shells), so this shadows /usr/bin/omarchy-screensaver
+# for every stock trigger: the idle service, the menu's Screensaver entry, and
+# `omarchy launch screensaver`.
+#
+# Differences from the packaged script: the active screensaver set decides which art
+# is drawn, which ttfx effect runs (with per-effect speed options) and which colour
+# gradient it settles into. Manage sets with `screensaver-set`, author with
+# `screensaver-dev`.
+
+source "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/bin/screensaver-lib.sh"
+
+screensaver_in_focus() {
+  hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
+}
+
+exit_screensaver() {
+  hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null || hyprctl keyword cursor:invisible false &>/dev/null || true
+  pkill -x ttfx 2>/dev/null
+  pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
+  exit 0
+}
+
+# Exit the screensaver on signals and input from keyboard and mouse
+trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
+
+printf '\033]11;rgb:00/00/00\007' # Set background color to black
+
+hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
+
+tty=$(tty 2>/dev/null)
+
+# Terminals allocate the pty at the default 80x24 and only resize it once the
+# compositor has told the window how big it is. ttfx measures the terminal once,
+# at startup, so starting it before the resize lands sizes an 80x24 canvas and
+# paints it into the corner of a fullscreen window.
+wait_for_terminal_resize() {
+  local deadline=$((SECONDS + 2))
+  while ((SECONDS < deadline)) && [[ $(stty size 2>/dev/null) == "24 80" ]]; do
+    sleep 0.02
+  done
+}
+
+wait_for_terminal_resize
+
+while true; do
+  # Re-resolved every pass: art, effect and palette all rotate, and a set switched
+  # while the screensaver runs takes effect on the next animation.
+  ss_build_argv "$(ss_active_set)"
+  ttfx "${SS_ARGV[@]}" &
+
+  while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do
+    if read -n1 -t 1 || ! screensaver_in_focus; then
+      exit_screensaver
+    fi
+  done
+done

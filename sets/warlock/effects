@@ -1,0 +1,19 @@
+# Warlock set. One line per animation: "<ttfx effect> [ttfx args...]".
+# Args tune speed and the effect's own palette; the set's `palettes` file supplies
+# --final-gradient-stops for whatever the art settles into.
+# `screensaver-set effects` (no args) lists every effect name ttfx accepts;
+# `ttfx <effect> --help` lists that effect's options.
+
+# Fire: characters ignite and burn in as pixel embers.
+burn --smoke-chance 0.25 --burn-colors ffffff ffd34d ff6b00 c81e00 3a0000
+# Embers sprayed up from the bottom that settle into the sigil.
+spray --spray-position s --spray-volume 0.04 --movement-speed-range 1.8-3.6
+# Fast fel rain resolving into the sigil.
+matrix --rain-time 1.5 --resolve-delay 1 --rain-color-gradient ff9d00 ff3b00 5a0d00 --highlight-color ffe9a8
+decrypt --typing-speed 10
+unstable --explosion-speed 3 --reassembly-speed 3
+laseretch --etch-speed 6 --etch-delay 1
+smoke --smoke-symbols ░ ▒ ▓ █ --starting-color 3a0000
+crumble
+blackhole
+swarm --swarm-coordination 90

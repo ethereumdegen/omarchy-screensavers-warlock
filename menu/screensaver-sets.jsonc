@@ -1,0 +1,9 @@
+  // Screensaver sets (art + effects + gradients), from omarchy-screensavers-warlock.
+  "style.screensaver.sets": {"icon":"󱄄","label":"Set","aliases":["screensaver-set"],"description":"Switch screensaver art, effects and gradients"},
+  "style.screensaver.sets.omarchy": {"icon":"󱄄","label":"Omarchy","description":"Stock logo, every effect","checked":"[[ $($HOME/.config/omarchy/bin/screensaver-set get) == omarchy ]]","action":"$HOME/.config/omarchy/bin/screensaver-set set omarchy"},
+  "style.screensaver.sets.warlock": {"icon":"󱄄","label":"Warlock","description":"Affliction, Demonology, Destruction sigils in fel fire","checked":"[[ $($HOME/.config/omarchy/bin/screensaver-set get) == warlock ]]","action":"$HOME/.config/omarchy/bin/screensaver-set set warlock"},
+  "style.screensaver.sets.next": {"icon":"󱄄","label":"Next Set","action":"$HOME/.config/omarchy/bin/screensaver-set next"},
+  "style.screensaver.sets.effects": {"icon":"","label":"Edit Effects","action":"$HOME/.config/omarchy/bin/screensaver-set effects"},
+  "style.screensaver.sets.palettes": {"icon":"","label":"Edit Gradients","action":"$HOME/.config/omarchy/bin/screensaver-set palettes warlock"},
+  "style.screensaver.sets.preview": {"icon":"󱄄","label":"Preview","action":"$HOME/.config/omarchy/bin/screensaver-set preview"},
+}

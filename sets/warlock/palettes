@@ -1,0 +1,9 @@
+# Colour gradients the art settles into, one "<name>: <colors...>" per line.
+# Picked at random per animation; fed to ttfx --final-gradient-stops
+# (first colour is the bottom of the gradient).
+ember: 3a0000 ff2200 ff8c00 ffe066
+felfire: 2b0b00 ff6a00 ffc400 fff3b0
+fel: 0b3d02 4cff00 d9ff9e
+shadow: 1a0033 6a00ff c77dff f2d4ff
+spectral: 00c3ff 7a5cff ff5cc8
+void: 000a1f 2b00b3 8a2be2 e0aaff

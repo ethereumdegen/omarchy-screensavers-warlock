@@ -1,0 +1,305 @@
+#!/bin/bash
+
+# Authoring and inspection harness for Omarchy screensaver sets.
+#
+#   screensaver-dev view <art.txt> [out.png]      render art text to a PNG (agent-viewable)
+#   screensaver-dev from-image <img> <art.txt> [transcode-opts...]
+#   screensaver-dev prep <img> <out.png> [--crop WxH+X+Y] [--circle] [--size N]
+#   screensaver-dev text <word> <out.txt> [rows]  block-letter a word into art text
+#   screensaver-dev compose <out.txt> <part.txt>...  stack fragments, centred
+#   screensaver-dev sweep <img> [out.png]         transcode variants + labelled montage
+#   screensaver-dev shot [opts]                   screenshot the live screensaver window
+#   screensaver-dev dims <art.txt>                columns x rows of an art file
+#
+# shot options:
+#   --set <name>       use a set's art, effects and palettes (default: active set)
+#   --art <file>       use one art file
+#   --effect <line>    force one effect line, e.g. "burn --smoke-chance 0.4"
+#   --palette <name>   force one palette from the set
+#   --at <secs>        capture at this offset, repeatable (default: 1.5 4)
+#   --out <prefix>     PNG prefix (default: /tmp/screensaver-shot)
+
+set -uo pipefail
+
+source "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/bin/screensaver-lib.sh"
+
+CLASS="org.omarchy.screensaver"
+FOOT_CONFIG="${OMARCHY_PATH:-/usr/share/omarchy}/default/foot/screensaver.ini"
+MONO_FONT=$(fc-match -f '%{file}' 'JetBrainsMono Nerd Font' 2>/dev/null)
+
+die() {
+  echo "$@" >&2
+  exit 1
+}
+
+dims() {
+  local file=$1
+  awk 'BEGIN { w = 0 } { if (length($0) > w) w = length($0); rows++ } END { print w "x" rows }' "$file"
+}
+
+# Rasterize art text the way a terminal shows it: white on black, monospace,
+# lines butted together so the half-block glyphs join.
+view() {
+  local art=$1 out=${2:-/tmp/$(basename "${1%.txt}").png}
+  [[ -f $art ]] || die "No such art file: $art"
+  magick -background black -fill white -font "$MONO_FONT" -pointsize 28 \
+    -interline-spacing -8 -kerning 0 "label:@$art" -bordercolor black -border 12 "$out" ||
+    die "magick failed for $art"
+  echo "$out ($(dims "$art"))"
+}
+
+from_image() {
+  local img=$1 out=$2
+  shift 2
+  omarchy-transcode-ascii "$img" "$out" --mode block --width 74 --height 28 "$@" >/dev/null ||
+    die "transcode failed for $img"
+  echo "$out ($(dims "$out"))"
+}
+
+# Clean a source image up for transcoding: --crop keeps a region, --circle blacks
+# out everything outside the inscribed disc (round WoW icons sit on light pages,
+# and that background otherwise becomes solid ink under --invert).
+prep() {
+  local in=$1 out=$2
+  shift 2
+  local crop="" circle=false size=512
+  while (($#)); do
+    case $1 in
+    --crop)
+      crop=$2
+      shift 2
+      ;;
+    --circle)
+      circle=true
+      shift
+      ;;
+    --size)
+      size=$2
+      shift 2
+      ;;
+    *) die "Unknown prep option: $1" ;;
+    esac
+  done
+  [[ -f $in ]] || die "No such image: $in"
+
+  local -a args=("$in")
+  [[ -n $crop ]] && args+=(-crop "$crop" +repage)
+  args+=(-resize "${size}x${size}!")
+  if [[ $circle == true ]]; then
+    local radius=$((size / 2))
+    args+=(\( +clone -alpha transparent -fill white -draw "circle $radius,$radius $radius,2" \)
+      -alpha off -compose CopyOpacity -composite -background black -alpha remove -alpha off)
+  fi
+  magick "${args[@]}" "$out" || die "prep failed for $in"
+  echo "$out ($(magick identify -format '%wx%h' "$out"))"
+}
+
+# Block-letter a word (same treatment as the stock Omarchy logo) into art text.
+text_art() {
+  local word=$1 out=$2 rows=${3:-6}
+  local png
+  png=$(mktemp /tmp/screensaver-text.XXXXXX.png)
+  magick -background none -fill white -family "Liberation Sans" -weight 900 \
+    -pointsize 200 -kerning 14 "label:$word" "$png" || die "magick label failed"
+  omarchy-transcode-ascii "$png" "$out" --mode block --width 74 --height "$rows" >/dev/null ||
+    die "transcode failed for $word"
+  rm -f "$png"
+  echo "$out ($(dims "$out"))"
+}
+
+# Stack art fragments into one canvas, each centred on the widest fragment,
+# separated by one blank line.
+compose() {
+  local out=$1
+  shift
+  (($#)) || die "Usage: screensaver-dev compose <out.txt> <part.txt>..."
+  python3 - "$out" "$@" <<'PY'
+import sys
+
+out, *parts = sys.argv[1:]
+blocks = []
+for path in parts:
+    with open(path, encoding="utf-8") as handle:
+        blocks.append([line.rstrip("\n") for line in handle if line.strip()])
+
+width = max(len(line) for block in blocks for line in block)
+lines = []
+for index, block in enumerate(blocks):
+    if index:
+        lines.append("")
+    block_width = max(len(line) for line in block)
+    pad = (width - block_width) // 2
+    lines.extend(" " * pad + line for line in block)
+
+with open(out, "w", encoding="utf-8") as handle:
+    handle.write("\n".join(line.rstrip() for line in lines) + "\n")
+print(f"{out} ({width}x{len(lines)})")
+PY
+}
+
+# Transcode one image under several threshold/polarity/mode combos and stitch the
+# rendered results into one labelled montage, so a single look picks the winner.
+sweep() {
+  local img=$1 out=${2:-/tmp/screensaver-sweep.png}
+  [[ -f $img ]] || die "No such image: $img"
+  local tmp
+  tmp=$(mktemp -d)
+  local tiles=() mode threshold invert label txt png
+  for mode in block braille; do
+    for threshold in 40 55 70; do
+      for invert in "" --invert; do
+        label="$mode t$threshold${invert:+ inv}"
+        txt="$tmp/$mode-$threshold${invert:+-inv}.txt"
+        png="$tmp/$mode-$threshold${invert:+-inv}.png"
+        omarchy-transcode-ascii "$img" "$txt" --mode "$mode" --width 74 --height 28 \
+          --threshold "$threshold" ${invert:+--invert} >/dev/null 2>&1 || continue
+        [[ -s $txt ]] || continue
+        magick -background black -fill white -font "$MONO_FONT" -pointsize 20 \
+          -interline-spacing -6 "label:@$txt" -resize 420x420 \
+          -background black -gravity center -extent 440x440 \
+          -bordercolor '#333333' -border 2 \
+          -background black -fill '#cccccc' -pointsize 22 label:"$label" -gravity center -append \
+          "$png" 2>/dev/null || continue
+        tiles+=("$png")
+      done
+    done
+  done
+  ((${#tiles[@]})) || die "no variants produced for $img"
+  magick montage -background black -tile 4x -geometry +6+6 "${tiles[@]}" "$out" ||
+    die "montage failed"
+  echo "$out (${#tiles[@]} variants, files in $tmp)"
+}
+
+shot() {
+  local set_name art effect palette out_prefix=/tmp/screensaver-shot
+  local -a ats=()
+  set_name=$(ss_active_set)
+  art=""
+  effect=""
+  palette=""
+  while (($#)); do
+    case $1 in
+    --set)
+      set_name=$2
+      shift 2
+      ;;
+    --art)
+      art=$2
+      shift 2
+      ;;
+    --effect)
+      effect=$2
+      shift 2
+      ;;
+    --palette)
+      palette=$2
+      shift 2
+      ;;
+    --at)
+      ats+=("$2")
+      shift 2
+      ;;
+    --out)
+      out_prefix=$2
+      shift 2
+      ;;
+    *) die "Unknown shot option: $1" ;;
+    esac
+  done
+  ((${#ats[@]})) || ats=(1.5 4)
+
+  # Same argv the runner would build, with optional overrides. --effect accepts a
+  # whole effect line ("burn --smoke-chance 0.4"), not just a name.
+  local -a build_args=()
+  [[ -n $art ]] && build_args+=(--art "$art")
+  [[ -n $effect ]] && build_args+=(--effect-line "$effect")
+  [[ -n $palette ]] && build_args+=(--palette "$palette")
+  ss_build_argv "$set_name" "${build_args[@]}" || die "could not resolve set $set_name"
+
+  local runner
+  runner=$(mktemp /tmp/screensaver-dev-run.XXXXXX.sh)
+  {
+    echo '#!/bin/bash'
+    printf 'printf "\\033]11;rgb:00/00/00\\007"\n'
+    printf 'ttfx'
+    printf ' %q' "${SS_ARGV[@]}"
+    printf '\nsleep 600\n'
+  } >"$runner"
+  chmod +x "$runner"
+
+  # Spawn through the compositor, the way omarchy-launch-screensaver does, so the
+  # window inherits the session environment and picks up the screensaver rules.
+  local spawn="foot --app-id=$CLASS --config=$FOOT_CONFIG -e $runner"
+  hyprctl dispatch "hl.dsp.exec_cmd([[$spawn]])" >/dev/null 2>&1 ||
+    hyprctl dispatch exec -- bash -lc "$spawn" >/dev/null
+
+  local geometry="" deadline=$((SECONDS + 5))
+  while ((SECONDS < deadline)); do
+    geometry=$(hyprctl clients -j |
+      jq -r --arg c "$CLASS" 'first(.[] | select(.class == $c)) | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' 2>/dev/null)
+    [[ -n $geometry && $geometry != null* ]] && break
+    sleep 0.2
+  done
+  [[ -n $geometry && $geometry != null* ]] || {
+    pkill -f "$(basename "$runner")"
+    rm -f "$runner"
+    die "screensaver window never appeared"
+  }
+
+  local previous=0 index=0 shots=()
+  for at in "${ats[@]}"; do
+    sleep "$(awk -v a="$at" -v p="$previous" 'BEGIN { d = a - p; print (d > 0 ? d : 0) }')"
+    previous=$at
+    grim -g "$geometry" "${out_prefix}-${index}.png" 2>/dev/null &&
+      shots+=("${out_prefix}-${index}.png at ${at}s")
+    ((index++))
+  done
+
+  pkill -x ttfx 2>/dev/null
+  pkill -f "$(basename "$runner")" 2>/dev/null
+  hyprctl dispatch closewindow "class:^${CLASS}$" >/dev/null 2>&1
+  rm -f "$runner"
+
+  printf 'art: %s\neffect: %s\n' "$art" "${effect:-random from ${set_name:-<none>}}"
+  printf '%s\n' "${shots[@]}"
+}
+
+case "${1:-}" in
+view)
+  shift
+  view "$@"
+  ;;
+from-image)
+  shift
+  from_image "$@"
+  ;;
+prep)
+  shift
+  prep "$@"
+  ;;
+text)
+  shift
+  text_art "$@"
+  ;;
+compose)
+  shift
+  compose "$@"
+  ;;
+sweep)
+  shift
+  sweep "$@"
+  ;;
+shot)
+  shift
+  shot "$@"
+  ;;
+dims)
+  shift
+  [[ -f ${1:-} ]] || die "Usage: screensaver-dev dims <art.txt>"
+  dims "$1"
+  ;;
+*)
+  sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+  exit 1
+  ;;
+esac
